@@ -1,0 +1,31 @@
+name: Metrics
+on:
+  schedule:
+    - cron: "0 0 * * *"  # Runs daily at midnight UTC
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  github-metrics:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: lowlighter/metrics@latest
+        with:
+          token: ${{ secrets.METRICS_TOKEN }}
+
+          # Output file
+          filename: metrics.svg
+
+          # Isometric contribution calendar
+          plugin_isocalendar: yes
+          plugin_isocalendar_duration: full-year
+
+          # Base settings
+          base: ""
+
+          # Commit the output
+          output_action: commit
