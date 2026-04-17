@@ -5,27 +5,38 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - metrics.svg
   workflow_dispatch:  # Allows manual trigger
+
+permissions:
+  contents: write
 
 jobs:
   github-metrics:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: lowlighter/metrics@latest
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.METRICS_TOKEN }}
-
-          # Output file
-          filename: metrics.svg
-
-          # Isometric contribution calendar
-          plugin_isocalendar: yes
-          plugin_isocalendar_duration: full-year
-
-          # Base settings
-          base: ""
-
-          # Commit the output
-          output_action: commit
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip huggingface_hub
+      - name: Generate metrics.svg
+        env:
+          GITHUB_TOKEN: ${{ secrets.METRICS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python scripts/generate_metrics.py --output metrics.svg
+      - name: Commit refreshed metrics
+        run: |
+          if git diff --quiet -- metrics.svg; then
+            echo "metrics.svg is already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add metrics.svg
+          git commit -m "chore: refresh metrics [skip ci]"
+          git push
