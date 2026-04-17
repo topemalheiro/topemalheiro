@@ -14,7 +14,7 @@ import sys
 import tempfile
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -76,7 +76,8 @@ def main() -> int:
     args = parser.parse_args()
 
     window_end = date.fromisoformat(args.today) if args.today else date.today()
-    window_start = subtract_one_year(window_end)
+    window_anchor = subtract_one_year(window_end)
+    window_start = previous_sunday(window_anchor)
     hf_sync_cutoff = date.fromisoformat(args.hf_sync_cutoff) if args.hf_sync_cutoff else None
 
     github_token = get_github_token()
@@ -134,6 +135,10 @@ def subtract_one_year(day: date) -> date:
         return day.replace(year=day.year - 1)
     except ValueError:
         return day.replace(year=day.year - 1, month=2, day=28)
+
+
+def previous_sunday(day: date) -> date:
+    return day - timedelta(days=(day.weekday() + 1) % 7)
 
 
 def get_github_token() -> str:
