@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import html
 import json
-import math
 import os
 import shutil
 import subprocess
@@ -336,7 +335,8 @@ def render_svg(
     current_streak, best_streak = compute_streaks(calendar_days)
     peak_day = max(calendar_days, key=lambda day: day.merged_count, default=None)
     max_count = peak_day.merged_count if peak_day else 0
-    level_max = max((day.merged_count for day in calendar_days), default=0)
+    level_thresholds = build_intensity_thresholds(calendar_days)
+    local_prominence, prominence_max = build_local_prominence(calendar_days)
     average_per_day = merged_total / len(calendar_days) if calendar_days else 0.0
     cutoff_text = (
         f"Includes {format_number(hf_total)} HF-only commits before {hf_sync_cutoff.isoformat()}."
@@ -355,8 +355,13 @@ def render_svg(
     for day in ordered_days:
         x = grid_origin_x + (day.week_index - day.weekday) * step_x
         y = grid_origin_y + (day.week_index + day.weekday) * step_y
-        level = intensity_level(day.merged_count, level_max)
-        lift = isometric_lift(day.merged_count, level_max)
+        level = intensity_level(day.merged_count, level_thresholds)
+        lift = isometric_lift(
+            day.merged_count,
+            max_count,
+            local_prominence.get(day.date, 0.0),
+            prominence_max,
+        )
         cells.append(render_isometric_tile(x, y, tile_width, tile_height, lift, level, build_day_title(day)))
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">
@@ -543,20 +548,59 @@ def compute_streaks(calendar_days: list[CalendarDay]) -> tuple[int, int]:
     return current, best
 
 
-def intensity_level(count: int, max_count: int) -> int:
+def build_intensity_thresholds(calendar_days: list[CalendarDay]) -> tuple[int, int, int]:
+    nonzero = sorted(day.merged_count for day in calendar_days if day.merged_count > 0)
+    if not nonzero:
+        return (0, 0, 0)
+    return tuple(percentile_value(nonzero, quantile) for quantile in (0.35, 0.7, 0.9))
+
+
+def percentile_value(values: list[int], quantile: float) -> int:
+    if not values:
+        return 0
+    index = min(len(values) - 1, max(0, round((len(values) - 1) * quantile)))
+    return values[index]
+
+
+def build_local_prominence(calendar_days: list[CalendarDay]) -> tuple[dict[date, float], float]:
+    ordered = sorted(calendar_days, key=lambda day: day.date)
+    prominence: dict[date, float] = {}
+
+    for index, day in enumerate(ordered):
+        window_start = max(0, index - 3)
+        window_end = min(len(ordered), index + 4)
+        neighbor_counts = [
+            ordered[neighbor_index].merged_count
+            for neighbor_index in range(window_start, window_end)
+            if neighbor_index != index
+        ]
+        local_average = sum(neighbor_counts) / len(neighbor_counts) if neighbor_counts else 0.0
+        prominence[day.date] = max(0.0, day.merged_count - local_average)
+
+    return prominence, max(prominence.values(), default=0.0)
+
+
+def intensity_level(count: int, thresholds: tuple[int, int, int]) -> int:
     if count <= 0:
         return 0
-    if max_count <= 1:
+    low, medium, high = thresholds
+    if count <= low:
         return 1
-    scaled = math.log(count + 1) / math.log(max_count + 1)
-    return max(1, min(4, math.ceil(scaled * 4)))
+    if count <= medium:
+        return 2
+    if count <= high:
+        return 3
+    return 4
 
 
-def isometric_lift(count: int, max_count: int) -> float:
+def isometric_lift(count: int, max_count: int, local_prominence: float, prominence_max: float) -> float:
     if count <= 0 or max_count <= 0:
         return 0.0
-    scaled = math.log(count + 1) / math.log(max_count + 1)
-    return round(2.0 + 14.0 * scaled, 3)
+    count_scale = (count / max_count) ** 0.55
+    prominence_scale = 0.0
+    if prominence_max > 0:
+        prominence_scale = min(1.0, local_prominence / prominence_max) ** 0.7
+    return round(min(26.0, 2.4 + 15.5 * count_scale + 5.5 * prominence_scale), 3)
 
 
 def render_isometric_tile(
