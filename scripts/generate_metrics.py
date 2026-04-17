@@ -384,6 +384,7 @@ def render_svg(
       --l2: #40c463;
       --l3: #30a14e;
       --l4: #216e39;
+      --tile-outline: rgba(27, 31, 35, 0.08);
     }}
     @media (prefers-color-scheme: dark) {{
       :root {{
@@ -396,6 +397,7 @@ def render_svg(
         --l2: #006d32;
         --l3: #26a641;
         --l4: #39d353;
+        --tile-outline: rgba(240, 246, 252, 0.08);
       }}
     }}
     svg {{
@@ -426,6 +428,10 @@ def render_svg(
     }}
     .level-4 {{
       fill: var(--l4);
+    }}
+    .tile-top {{
+      stroke: var(--tile-outline);
+      stroke-width: 0.7;
     }}
     .section-title {{
       fill: var(--link);
@@ -571,10 +577,10 @@ def render_isometric_tile(
     if lift > 0:
         left_path = polygon_path([top_left, top_bottom, ground_bottom, ground_left])
         right_path = polygon_path([top_bottom, top_right, ground_right, ground_bottom])
-        parts.append(f'<path class="level-{level}" filter="url(#brightness1)" d="{left_path}"/>')
-        parts.append(f'<path class="level-{level}" filter="url(#brightness2)" d="{right_path}"/>')
+        parts.append(f'<path class="tile-side level-{level}" filter="url(#brightness1)" d="{left_path}"/>')
+        parts.append(f'<path class="tile-side level-{level}" filter="url(#brightness2)" d="{right_path}"/>')
 
-    parts.append(f'<path class="level-{level}" d="{top_path}"/>')
+    parts.append(f'<path class="tile-top level-{level}" d="{top_path}"/>')
     parts.append("</g>")
     return "".join(parts)
 
