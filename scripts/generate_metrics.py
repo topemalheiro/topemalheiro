@@ -469,8 +469,8 @@ def render_svg(
   <text class="stat-line" x="300" y="205">Average per day at ~{average_per_day:.2f}</text>
   <text class="peak" x="24" y="72">GitHub {format_number(github_total)} + HF {format_number(hf_total)} = {format_number(merged_total)}</text>
   {''.join(cells)}
-  <text class="footer" x="24" y="294">{escape(cutoff_text)}</text>
-  <text class="footer" x="24" y="312">HF source: {escape(hf_repo_id)} across {hf_branch_count} branch{'' if hf_branch_count == 1 else 'es'}, excluding commits already present on {escape(compare_repo)}. Peak day: {escape(peak_label)}.</text>
+  <text class="footer" x="24" y="304">{escape(cutoff_text)}</text>
+  <text class="footer" x="24" y="320">HF source: branches in private models. Peak day: {escape(peak_label)}.</text>
 </svg>
 """
     return svg
