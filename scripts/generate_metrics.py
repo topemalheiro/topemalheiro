@@ -28,6 +28,7 @@ DEFAULT_LOGIN = "topemalheiro"
 DEFAULT_COMPARE_REPO = "topemalheiro/CV-Project"
 DEFAULT_HF_REPO_ID = "topemalheiro/CV_Project"
 DEFAULT_HF_REPO_TYPE = "model"
+DEFAULT_HF_SYNC_CUTOFF = "2025-12-27"
 
 
 @dataclass(frozen=True)
@@ -67,10 +68,16 @@ def main() -> int:
         default=os.getenv("METRICS_TODAY"),
         help="Override the end date in YYYY-MM-DD format.",
     )
+    parser.add_argument(
+        "--hf-sync-cutoff",
+        default=os.getenv("HF_SYNC_CUTOFF", DEFAULT_HF_SYNC_CUTOFF),
+        help="Do not count HF overlay commits on or after this YYYY-MM-DD date.",
+    )
     args = parser.parse_args()
 
     window_end = date.fromisoformat(args.today) if args.today else date.today()
     window_start = subtract_one_year(window_end)
+    hf_sync_cutoff = date.fromisoformat(args.hf_sync_cutoff) if args.hf_sync_cutoff else None
 
     github_token = get_github_token()
     calendar_data = fetch_github_calendar(args.login, github_token, window_start, window_end)
@@ -82,6 +89,7 @@ def main() -> int:
         github_repo_shas=github_repo_shas,
         window_start=window_start,
         window_end=window_end,
+        hf_sync_cutoff=hf_sync_cutoff,
     )
 
     calendar_days = merge_calendar_days(calendar_data["weeks"], hf_counts)
@@ -96,6 +104,7 @@ def main() -> int:
         github_total=calendar_data["totalContributions"],
         hf_total=hf_commit_total,
         hf_branch_count=hf_branch_count,
+        hf_sync_cutoff=hf_sync_cutoff,
     )
 
     output_path = Path(args.output)
@@ -112,6 +121,7 @@ def main() -> int:
                 "hf_total": hf_commit_total,
                 "merged_total": merged_total,
                 "hf_branch_count": hf_branch_count,
+                "hf_sync_cutoff": hf_sync_cutoff.isoformat() if hf_sync_cutoff else None,
             },
             indent=2,
         )
@@ -250,6 +260,7 @@ def fetch_hf_overlay_counts(
     github_repo_shas: set[str],
     window_start: date,
     window_end: date,
+    hf_sync_cutoff: date | None,
 ) -> tuple[Counter[str], int, int]:
     api = HfApi(token=os.getenv("HF_TOKEN"))
     refs = api.list_repo_refs(repo_id, repo_type=repo_type)
@@ -265,6 +276,8 @@ def fetch_hf_overlay_counts(
             if commit.commit_id in github_repo_shas:
                 continue
             if commit_date < window_start or commit_date > window_end:
+                continue
+            if hf_sync_cutoff is not None and commit_date >= hf_sync_cutoff:
                 continue
             unique_hf_commits.setdefault(commit.commit_id, commit_date)
 
@@ -301,127 +314,88 @@ def render_svg(
     github_total: int,
     hf_total: int,
     hf_branch_count: int,
+    hf_sync_cutoff: date | None,
 ) -> str:
-    width = 920
+    del months
+
+    width = 480
     height = 330
-    card_width = 136
-    card_gap = 12
-    card_height = 56
-    card_x = 24
-    card_y = 84
-    cell_size = 11
-    cell_gap = 3
-    grid_x = 86
-    grid_y = 188
-    grid_step = cell_size + cell_gap
+    tile_width = 13.6
+    tile_height = 8.0
+    step_x = tile_width / 2
+    step_y = tile_height / 2
+    grid_origin_x = 62
+    grid_origin_y = 84
 
     merged_total = sum(day.merged_count for day in calendar_days)
-    active_days = sum(1 for day in calendar_days if day.merged_count > 0)
-    hf_active_days = sum(1 for day in calendar_days if day.hf_count > 0)
     current_streak, best_streak = compute_streaks(calendar_days)
     peak_day = max(calendar_days, key=lambda day: day.merged_count, default=None)
     max_count = peak_day.merged_count if peak_day else 0
-
-    month_positions = build_month_positions(calendar_days, months)
     level_max = max((day.merged_count for day in calendar_days), default=0)
-
-    stats = [
-        ("Merged total", format_number(merged_total)),
-        ("GitHub total", format_number(github_total)),
-        ("HF added", format_number(hf_total)),
-        ("HF days", format_number(hf_active_days)),
-        ("Current streak", f"{current_streak} days"),
-        ("Best streak", f"{best_streak} days"),
-    ]
-
-    cards = []
-    for index, (label, value) in enumerate(stats):
-        x = card_x + index * (card_width + card_gap)
-        cards.append(
-            "\n".join(
-                [
-                    f'<rect class="card" x="{x}" y="{card_y}" width="{card_width}" height="{card_height}" rx="12"/>',
-                    f'<text class="card-label" x="{x + 14}" y="{card_y + 22}">{escape(label)}</text>',
-                    f'<text class="card-value" x="{x + 14}" y="{card_y + 43}">{escape(value)}</text>',
-                ]
-            )
-        )
-
-    month_labels = []
-    for month_name, week_index in month_positions:
-        x = grid_x + week_index * grid_step
-        month_labels.append(f'<text class="axis-label" x="{x}" y="{grid_y - 12}">{escape(month_name)}</text>')
-
-    weekday_labels = []
-    for label, weekday in (("Mon", 1), ("Wed", 3), ("Fri", 5)):
-        y = grid_y + weekday * grid_step + 9
-        weekday_labels.append(f'<text class="axis-label" x="24" y="{y}">{label}</text>')
-
-    cells = []
-    for day in calendar_days:
-        x = grid_x + day.week_index * grid_step
-        y = grid_y + day.weekday * grid_step
-        level = intensity_level(day.merged_count, level_max)
-        classes = [f"cell", f"level-{level}"]
-        if day.hf_count > 0:
-            classes.append("hf-overlay")
-        title = build_day_title(day)
-        cells.append(
-            (
-                f'<rect class="{" ".join(classes)}" x="{x}" y="{y}" width="{cell_size}" '
-                f'height="{cell_size}" rx="2"><title>{escape(title)}</title></rect>'
-            )
-        )
-
-    legend_x = width - 212
-    legend_y = height - 34
-    legend_cells = []
-    for index in range(5):
-        x = legend_x + 60 + index * 16
-        legend_cells.append(
-            f'<rect class="cell level-{index}" x="{x}" y="{legend_y - 10}" width="11" height="11" rx="2"/>'
-        )
+    average_per_day = merged_total / len(calendar_days) if calendar_days else 0.0
+    cutoff_text = (
+        f"Includes {format_number(hf_total)} HF-only commits before {hf_sync_cutoff.isoformat()}."
+        if hf_total and hf_sync_cutoff is not None
+        else f"Includes {format_number(hf_total)} HF-only commits from {hf_repo_id}."
+        if hf_total
+        else "No extra HF-only commits are currently being added."
+    )
 
     peak_label = "n/a"
     if peak_day is not None:
         peak_label = f"{format_number(max_count)} on {peak_day.date.isoformat()}"
 
-    footer_text = (
-        f"Rolling window: {window_start.isoformat()} to {window_end.isoformat()}  |  "
-        f"HF overlay from {hf_repo_id} across {hf_branch_count} branch"
-        f"{'' if hf_branch_count == 1 else 'es'}, excluding commits already present on {compare_repo}"
-    )
+    cells = []
+    ordered_days = sorted(calendar_days, key=lambda day: (day.week_index + day.weekday, day.week_index, day.weekday))
+    for day in ordered_days:
+        x = grid_origin_x + (day.week_index - day.weekday) * step_x
+        y = grid_origin_y + (day.week_index + day.weekday) * step_y
+        level = intensity_level(day.merged_count, level_max)
+        lift = isometric_lift(day.merged_count, level_max)
+        cells.append(render_isometric_tile(x, y, tile_width, tile_height, lift, level, build_day_title(day)))
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">
   <title id="title">Contribution calendar for {escape(login)}</title>
-  <desc id="desc">Rolling last 12 months of GitHub contributions with Hugging Face-only commits overlaid from {escape(hf_repo_id)}.</desc>
+  <desc id="desc">Rolling last 12 months of GitHub contributions with pre-sync Hugging Face commits merged into the same calendar.</desc>
+  <defs>
+    <filter id="brightness1">
+      <feComponentTransfer>
+        <feFuncR type="linear" slope="0.6"/>
+        <feFuncG type="linear" slope="0.6"/>
+        <feFuncB type="linear" slope="0.6"/>
+      </feComponentTransfer>
+    </filter>
+    <filter id="brightness2">
+      <feComponentTransfer>
+        <feFuncR type="linear" slope="0.2"/>
+        <feFuncG type="linear" slope="0.2"/>
+        <feFuncB type="linear" slope="0.2"/>
+      </feComponentTransfer>
+    </filter>
+  </defs>
   <style>
     :root {{
       --bg: #ffffff;
-      --text: #1f2328;
-      --muted: #656d76;
-      --card: #f6f8fa;
-      --card-stroke: #d0d7de;
+      --text: #24292f;
+      --muted: #57606a;
+      --link: #0969da;
       --zero: #ebedf0;
       --l1: #9be9a8;
       --l2: #40c463;
       --l3: #30a14e;
       --l4: #216e39;
-      --hf: #d97706;
     }}
     @media (prefers-color-scheme: dark) {{
       :root {{
         --bg: #0d1117;
         --text: #f0f6fc;
         --muted: #8b949e;
-        --card: #161b22;
-        --card-stroke: #30363d;
+        --link: #58a6ff;
         --zero: #161b22;
         --l1: #0e4429;
         --l2: #006d32;
         --l3: #26a641;
         --l4: #39d353;
-        --hf: #f59e0b;
       }}
     }}
     svg {{
@@ -430,34 +404,13 @@ def render_svg(
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     }}
     .title {{
-      fill: var(--text);
-      font-size: 26px;
-      font-weight: 700;
+      fill: var(--link);
+      font-size: 16px;
+      font-weight: 500;
     }}
     .subtitle {{
       fill: var(--muted);
-      font-size: 13px;
-    }}
-    .card {{
-      fill: var(--card);
-      stroke: var(--card-stroke);
-    }}
-    .card-label {{
-      fill: var(--muted);
-      font-size: 12px;
-    }}
-    .card-value {{
-      fill: var(--text);
-      font-size: 21px;
-      font-weight: 700;
-    }}
-    .axis-label {{
-      fill: var(--muted);
       font-size: 11px;
-    }}
-    .cell {{
-      stroke: transparent;
-      stroke-width: 1.5;
     }}
     .level-0 {{
       fill: var(--zero);
@@ -474,10 +427,19 @@ def render_svg(
     .level-4 {{
       fill: var(--l4);
     }}
-    .hf-overlay {{
-      stroke: var(--hf);
+    .section-title {{
+      fill: var(--link);
+      font-size: 14px;
+      font-weight: 500;
     }}
-    .legend-label, .footer {{
+    .stat-line {{
+      fill: var(--text);
+      font-size: 13px;
+    }}
+    .bullet {{
+      fill: var(--muted);
+    }}
+    .footer {{
       fill: var(--muted);
       font-size: 11px;
     }}
@@ -487,19 +449,22 @@ def render_svg(
       font-weight: 600;
     }}
   </style>
-  <text class="title" x="24" y="38">Contributions Calendar</text>
-  <text class="subtitle" x="24" y="58">GitHub activity with Hugging Face-only commits layered into the same rolling 12-month graph.</text>
-  {''.join(cards)}
-  <text class="peak" x="24" y="164">Peak day: {escape(peak_label)}  |  Active days: {active_days}</text>
-  {''.join(month_labels)}
-  {''.join(weekday_labels)}
+  <text class="title" x="24" y="34">Contributions calendar</text>
+  <text class="subtitle" x="24" y="52">Window ends {window_end.isoformat()} and starts {window_start.isoformat()}.</text>
+  <text class="section-title" x="300" y="86">Commits streaks</text>
+  <circle class="bullet" cx="286" cy="107" r="3"/>
+  <text class="stat-line" x="300" y="111">Current streak {current_streak} days</text>
+  <circle class="bullet" cx="286" cy="126" r="3"/>
+  <text class="stat-line" x="300" y="130">Best streak {best_streak} days</text>
+  <text class="section-title" x="300" y="161">Commits per day</text>
+  <circle class="bullet" cx="286" cy="182" r="3"/>
+  <text class="stat-line" x="300" y="186">Highest in a day at {format_number(max_count)}</text>
+  <circle class="bullet" cx="286" cy="201" r="3"/>
+  <text class="stat-line" x="300" y="205">Average per day at ~{average_per_day:.2f}</text>
+  <text class="peak" x="24" y="72">GitHub {format_number(github_total)} + HF {format_number(hf_total)} = {format_number(merged_total)}</text>
   {''.join(cells)}
-  <text class="legend-label" x="{legend_x}" y="{legend_y}">Lower</text>
-  {''.join(legend_cells)}
-  <text class="legend-label" x="{legend_x + 146}" y="{legend_y}">Higher</text>
-  <rect class="cell level-0 hf-overlay" x="{legend_x}" y="{legend_y - 10}" width="11" height="11" rx="2"/>
-  <text class="legend-label" x="{legend_x + 18}" y="{legend_y}">HF overlay day</text>
-  <text class="footer" x="24" y="{height - 18}">{escape(footer_text)}</text>
+  <text class="footer" x="24" y="294">{escape(cutoff_text)}</text>
+  <text class="footer" x="24" y="312">HF source: {escape(hf_repo_id)} across {hf_branch_count} branch{'' if hf_branch_count == 1 else 'es'}, excluding commits already present on {escape(compare_repo)}. Peak day: {escape(peak_label)}.</text>
 </svg>
 """
     return svg
@@ -574,6 +539,53 @@ def intensity_level(count: int, max_count: int) -> int:
         return 1
     scaled = math.log(count + 1) / math.log(max_count + 1)
     return max(1, min(4, math.ceil(scaled * 4)))
+
+
+def isometric_lift(count: int, max_count: int) -> float:
+    if count <= 0 or max_count <= 0:
+        return 0.0
+    scaled = math.log(count + 1) / math.log(max_count + 1)
+    return round(2.0 + 14.0 * scaled, 3)
+
+
+def render_isometric_tile(
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    lift: float,
+    level: int,
+    title: str,
+) -> str:
+    top_top = (x + width / 2, y - lift)
+    top_left = (x, y + height / 2 - lift)
+    top_bottom = (x + width / 2, y + height - lift)
+    top_right = (x + width, y + height / 2 - lift)
+    ground_left = (x, y + height / 2)
+    ground_bottom = (x + width / 2, y + height)
+    ground_right = (x + width, y + height / 2)
+
+    top_path = polygon_path([top_bottom, top_left, top_top, top_right])
+    parts = [f'<g class="tile level-{level}"><title>{escape(title)}</title>']
+
+    if lift > 0:
+        left_path = polygon_path([top_left, top_bottom, ground_bottom, ground_left])
+        right_path = polygon_path([top_bottom, top_right, ground_right, ground_bottom])
+        parts.append(f'<path class="level-{level}" filter="url(#brightness1)" d="{left_path}"/>')
+        parts.append(f'<path class="level-{level}" filter="url(#brightness2)" d="{right_path}"/>')
+
+    parts.append(f'<path class="level-{level}" d="{top_path}"/>')
+    parts.append("</g>")
+    return "".join(parts)
+
+
+def polygon_path(points: list[tuple[float, float]]) -> str:
+    formatted = " ".join(f"{format_float(x)},{format_float(y)}" for x, y in points)
+    return f"M{formatted} z"
+
+
+def format_float(value: float) -> str:
+    return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
 def build_day_title(day: CalendarDay) -> str:
