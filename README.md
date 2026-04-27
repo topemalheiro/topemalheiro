@@ -1,6 +1,6 @@
 <img src="./metrics.svg" alt="Metrics" width="470" align="left" />
 
-# Highlighted Projects:
+<strong>Highlighted Projects:</strong>
 <br />
 <br />
 <small>
